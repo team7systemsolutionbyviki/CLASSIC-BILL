@@ -110,7 +110,7 @@ async function syncToCloud(collectionName, documentData) {
         if (collectionName === 'customerPayments') docName = 'customer_payments';
         if (collectionName === 'supplierPayments') docName = 'supplier_payments';
         
-        const globalCols = ['admins'];
+        const globalCols = ['admins', 'branches'];
         let fbDocName = globalCols.includes(collectionName) ? docName : `${currentBranchId}_${docName}`;
         
         await db.collection('mediflow_data').doc(fbDocName).set({
@@ -128,7 +128,7 @@ async function syncFromCloud() {
     if (!isFirebaseEnabled || !db) return;
     try {
         isSyncingFromCloud = true;
-        const collections = ['products', 'sales', 'settings', 'purchases', 'expenses', 'customers', 'suppliers', 'admins', 'supplierPayments', 'customerPayments'];
+        const collections = ['products', 'sales', 'settings', 'purchases', 'expenses', 'customers', 'suppliers', 'admins', 'supplierPayments', 'customerPayments', 'branches'];
         
         let hasUpdates = false;
         for (const col of collections) {
@@ -136,7 +136,7 @@ async function syncFromCloud() {
             if (col === 'customerPayments') docName = 'customer_payments';
             if (col === 'supplierPayments') docName = 'supplier_payments';
 
-            const globalCols = ['admins'];
+            const globalCols = ['admins', 'branches'];
             let fbDocName = globalCols.includes(col) ? docName : `${currentBranchId}_${docName}`;
 
             const doc = await db.collection('mediflow_data').doc(fbDocName).get();
@@ -147,11 +147,24 @@ async function syncFromCloud() {
                 if (col === 'settings') {
                     settings = cloudData;
                     localStorage.setItem('mediflow_settings', JSON.stringify(settings));
+                } else if (col === 'branches') {
+                    branches = cloudData || [];
+                    localStorage.setItem('mediflow_branches', JSON.stringify(branches));
                 } else {
                     const arrayData = cloudData || [];
                     if (arrayData.length > 0) {
+                        // Correctly update local let-declared variables
+                        if (col === 'products') products = arrayData;
+                        else if (col === 'sales') sales = arrayData;
+                        else if (col === 'purchases') purchases = arrayData;
+                        else if (col === 'expenses') expenses = arrayData;
+                        else if (col === 'customers') customers = arrayData;
+                        else if (col === 'suppliers') suppliers = arrayData;
+                        else if (col === 'admins') admins = arrayData;
+                        else if (col === 'supplierPayments') supplierPayments = arrayData;
+                        else if (col === 'customerPayments') customerPayments = arrayData;
+
                         window[col] = arrayData;
-                        // Special names for localStorage
                         let localKey = 'mediflow_' + (col === 'supplierPayments' ? 'supplier_payments' : (col === 'customerPayments' ? 'customer_payments' : col));
                         localStorage.setItem(localKey, JSON.stringify(arrayData));
                     }
@@ -176,9 +189,14 @@ async function backupAllToCloud() {
         alert('Cloud backup is not connected.');
         return;
     }
+    const btn = document.getElementById('cloud-backup-btn');
+    const originalText = btn ? btn.innerHTML : 'BACKUP TO CLOUD';
     try {
-        const btn = document.getElementById('cloud-backup-btn');
-        if (btn) btn.innerHTML = 'Backing up...';
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Backing up...';
+            lucide.createIcons();
+        }
         await syncToCloud('products', { data: products });
         await syncToCloud('sales', { data: sales });
         await syncToCloud('settings', settings);
@@ -187,12 +205,19 @@ async function backupAllToCloud() {
         await syncToCloud('customers', { data: customers });
         await syncToCloud('suppliers', { data: suppliers });
         await syncToCloud('admins', { data: admins });
+        await syncToCloud('customerPayments', { data: customerPayments });
+        await syncToCloud('supplierPayments', { data: supplierPayments });
+        await syncToCloud('branches', { data: branches });
         alert('All local data successfully backed up to Firebase!');
-        if (btn) btn.innerHTML = '<i data-lucide="cloud-upload"></i> BACKUP TO CLOUD';
-        if (typeof lucide !== 'undefined') lucide.createIcons();
     } catch (e) {
          alert('Backup failed: ' + e.message);
          console.error(e);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+        }
     }
 }
 
@@ -221,7 +246,8 @@ localStorage.setItem = function(key, value) {
             'mediflow_suppliers': 'suppliers',
             'mediflow_admins': 'admins',
             'mediflow_supplier_payments': 'supplierPayments',
-            'mediflow_customer_payments': 'customerPayments'
+            'mediflow_customer_payments': 'customerPayments',
+            'mediflow_branches': 'branches'
         };
 
         if (keyMap[key]) {
@@ -1251,69 +1277,6 @@ function saveAndRefresh() {
     syncToCloud('products', products);
 }
 
-// --- Cloud Sync Helpers ---
-async function syncToCloud(collection, data) {
-    if (!isFirebaseEnabled || !db || typeof firebase === 'undefined') return;
-    try {
-        await db.collection('mediflow_data').doc(collection).set({ payload: data, updatedAt: new Date().toISOString() });
-    } catch (e) {
-        console.warn("Cloud Sync Failed:", e);
-    }
-}
-
-async function syncFromCloud() {
-    if (!isFirebaseEnabled || !db || typeof firebase === 'undefined') return;
-    try {
-        const doc = await db.collection('mediflow_data').doc('products').get();
-        if (doc.exists) {
-            const cloudData = doc.data().payload;
-            if (cloudData && Array.isArray(cloudData) && cloudData.length > 0) {
-                products = cloudData;
-                localStorage.setItem('mediflow_products', JSON.stringify(products));
-                renderProducts();
-                renderDashboard();
-            }
-        }
-    } catch (e) {
-        console.error("Error fetching from cloud:", e);
-    }
-}
-
-async function backupAllToCloud() {
-    if (!isFirebaseEnabled || !db || typeof firebase === 'undefined') {
-        alert("Firebase is not connected. Please check your config in script.js");
-        return;
-    }
-
-    const btn = document.getElementById('cloud-backup-btn');
-    const originalText = btn.innerHTML;
-    
-    try {
-        btn.disabled = true;
-        btn.innerHTML = '<i data-lucide="loader" class="spin"></i> Backing up...';
-        lucide.createIcons();
-
-        // Backup each major collection
-        await syncToCloud('products', products);
-        await syncToCloud('sales', sales);
-        await syncToCloud('expenses', expenses);
-        await syncToCloud('purchases', purchases);
-        await syncToCloud('customers', customers);
-        await syncToCloud('suppliers', suppliers);
-        await syncToCloud('customer_payments', customerPayments);
-        await syncToCloud('supplierPayments', supplierPayments);
-        await syncToCloud('settings', settings);
-
-        alert("Database successfully backed up to Firebase Cloud!");
-    } catch (e) {
-        console.error("Backup failed:", e);
-        alert("Cloud Backup Failed! Check your internet connection.");
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-        lucide.createIcons();
-    }
-}
 
 let searchSelectedIndex = -1;
 let customerSearchSelectedIndex = -1;
